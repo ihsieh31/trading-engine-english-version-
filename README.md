@@ -207,7 +207,7 @@ cd trading-engine-english-version-
 ./run.sh
 ```
 
-First run launches the interactive setup wizard:
+First run launches the setup menu:
 
 1. Choose language (English / 中文)
 2. Enter LLM API Key, API Endpoint, Model ID (any OpenAI-format)
