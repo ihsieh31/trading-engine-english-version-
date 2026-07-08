@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════════
+#  高階指令 — 僅限 repo owner (ihsieh31) 使用
+#  不可修改：此檔案受 CODEOWNERS 保護，變更需 ihsieh31 審核
+#  修改此檔案等同修改系統安全設定
+# ═══════════════════════════════════════════════════════════════
+
+name: opencode
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened, edited]
+
+jobs:
+  opencode:
+    if: |
+      github.event.comment.user.login == 'ihsieh31' &&
+      (contains(github.event.comment.body, '/oc') ||
+       contains(github.event.comment.body, '/opencode'))
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+        with:
+          model: opencode/deepseek-v4-flash-free
