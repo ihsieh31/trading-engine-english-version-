@@ -626,6 +626,7 @@ Due to Archive.org access restrictions on some items, the 8 classic trading book
 
 - [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) — Stock analysis workflow reference
 - [TradingAgents](https://github.com/TauricResearch/TradingAgents) — LLM multi-agent trading analysis framework
+- [AI Berkshire](https://github.com/xbtlin/ai-berkshire) — Value investing research framework that inspired `lib/financial_rigor.py` (Decimal precision / market cap verification / Benford check), the value scoring layer in screener, Mirror Test (5-sentence buy rationale), and Thesis Tracker (investment thesis drift detection)
 - `economics-knowledge.yaml` — Integrates 100+ classic texts, IMF papers, academic journals (1,457 total sources)
 
 ## Disclaimer
