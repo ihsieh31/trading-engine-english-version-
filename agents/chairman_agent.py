@@ -4,19 +4,19 @@ import json
 import logging
 from typing import Any
 
-from openai import OpenAI
-
 from config import Config
 from interfaces_v2 import IChairmanAgent, AgentProposal, ChairmanDecision, RiskAssessment, IMemoryService
+from llm_client import LLMClient
 import db
 
 log = logging.getLogger(__name__)
 
 
 class ChairmanAgent(IChairmanAgent):
-    def __init__(self, memory_service=None, config=None, name="chairman"):
+    def __init__(self, memory_service=None, config=None, llm_client=None, name="chairman"):
         self._memory_service = memory_service
         self._config = config or Config()
+        self._llm = llm_client or LLMClient()
         self._name = name
 
     @property
@@ -136,19 +136,15 @@ class ChairmanAgent(IChairmanAgent):
         ticker: str,
         weighted_scores: dict[str, float],
     ) -> str | None:
-        cfg = self._config
-        client = OpenAI(
-            api_key=cfg.OPENAI_COMPATIBLE_API_KEY,
-            base_url=cfg.LLM_BACKEND_URL,
-        )
         prompt = self._build_arbitration_prompt(proposals, ticker, weighted_scores)
         try:
-            resp = client.chat.completions.create(
-                model=cfg.QUICK_THINK_MODEL,
+            resp = self._llm.call_text(
                 messages=[{"role": "user", "content": prompt}],
+                model=self._config.QUICK_THINK_MODEL,
                 temperature=0.2,
+                max_retries=1,
             )
-            text = resp.choices[0].message.content.strip().upper()
+            text = resp.text.strip().upper()
             for candidate in ("BUY", "SELL", "HOLD"):
                 if candidate in text:
                     return candidate

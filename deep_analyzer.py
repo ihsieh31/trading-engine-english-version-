@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import time
 from config import Config
+from llm_client import LLMClient
 
 from news_service import NewsService
 from trading_calendar import last_trading_day
@@ -113,17 +114,22 @@ _FIELD_PATTERN = re.compile(
 def parse_pm_decision(markdown_text: str, ticker: str = "") -> dict:
     """從 PortfolioManager 的 markdown 輸出解析結構化資料。
 
-    預期輸入格式（render_pm_decision 產生）：
-      **Rating**: Buy
+    使用多策略 JSON recovery（支援 markdown fence、raw JSON、brace substring），
+    同時保持舊版 **Field**: Value 格式相容性。
 
-      **Executive Summary**: ...
-
-      **Investment Thesis**: ...
-
-      **Price Target**: 195.50
-
-      **Time Horizon**: 3-6 months
+    Ported from daily_stock_analysis runner.py try_parse_json().
     """
+    _llm_client = LLMClient()
+    parsed = _llm_client._try_parse_json(markdown_text)
+    if parsed and isinstance(parsed, dict):
+        return {
+            "rating": parsed.get("rating", parsed.get("Rating", "Hold")),
+            "executive_summary": parsed.get("executive_summary", parsed.get("executive_summary", "")),
+            "investment_thesis": parsed.get("investment_thesis", parsed.get("thesis", "")),
+            "price_target": parsed.get("price_target"),
+            "time_horizon": parsed.get("time_horizon", parsed.get("time_horizon", "")),
+        }
+
     result = {
         "rating": "Hold",
         "executive_summary": "",
@@ -258,7 +264,7 @@ def _analyze_with_analyst_agent(ticker: str, trade_date: str) -> dict:
         regime=regime.get("regime", "unknown"),
     )
 
-    agent = AnalystAgent()
+    agent = AnalystAgent(llm_client=LLMClient())
     proposal = agent.analyze(context)
 
     log.info(f"[{ticker}] V2 Rating: {proposal.rating} | Confidence: {proposal.confidence}")

@@ -6,10 +6,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from openai import OpenAI
-
 from config import Config
 from interfaces_v2 import IAgent, AgentProposal, AnalysisContext, ReflectionResult
+from llm_client import LLMClient
 
 log = logging.getLogger(__name__)
 
@@ -27,15 +26,70 @@ class OrderResult:
 
 
 class BaseAgent(IAgent):
-    def __init__(self, name: str = ""):
+    """Abstract base agent with Template Method pattern.
+
+    Ported from daily_stock_analysis BaseAgent:
+    - run() defines the skeleton (build messages → call LLM → post-process)
+    - Subclasses override system_prompt(), build_user_message(), post_process()
+    """
+
+    def __init__(self, name: str = "", llm_client: LLMClient | None = None):
         self._name = name
+        self._llm = llm_client or LLMClient()
 
     @property
     def name(self) -> str:
         return self._name
 
+    def system_prompt(self) -> str:
+        return "You are a professional financial analyst."
+
+    def build_user_message(self, context: AnalysisContext) -> str:
+        return json.dumps(context.technical_snapshot, indent=2, default=str)
+
+    def post_process(self, text: str, context: AnalysisContext) -> dict[str, Any] | None:
+        return None
+
+    def run(self, context: AnalysisContext, **llm_kwargs: Any) -> AgentProposal:
+        messages = [
+            {"role": "system", "content": self.system_prompt()},
+            {"role": "user", "content": self.build_user_message(context)},
+        ]
+        model = llm_kwargs.get("model") or Config().DEEP_THINK_MODEL
+        temperature = llm_kwargs.get("temperature", 0.3)
+        max_retries = llm_kwargs.get("max_retries", 2)
+        timeout_sec = llm_kwargs.get("timeout_sec", 60.0)
+        enable_thinking = llm_kwargs.get("enable_thinking", False)
+
+        data, raw = self._llm.call_json(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_retries=max_retries,
+            timeout_sec=timeout_sec,
+            enable_thinking=enable_thinking,
+        )
+
+        if data is None:
+            data = self.post_process(raw.text, context) or {}
+
+        return self._build_proposal(data, context)
+
+    def _build_proposal(self, data: dict, context: AnalysisContext) -> AgentProposal:
+        return AgentProposal(
+            agent_name=self.name,
+            ticker=context.ticker,
+            rating=data.get("rating", "HOLD"),
+            confidence=data.get("confidence", 0.5),
+            thesis=data.get("thesis", data.get("executive_summary", "")),
+            price_target=data.get("price_target"),
+            time_horizon=data.get("time_horizon", "short"),
+            key_risks=data.get("key_risks", []),
+            supporting_rules_used=data.get("supporting_rules_used", []),
+        )
+
     def analyze(self, context: AnalysisContext) -> AgentProposal:
-        raise NotImplementedError
+        return self.run(context)
 
 
 class AnalystAgent(BaseAgent):
@@ -71,57 +125,16 @@ Market Regime: {regime}
 """
 
     def __init__(self, llm_client=None, name="analyst"):
-        super().__init__(name)
+        super().__init__(name, llm_client=llm_client)
         self._llm_client = llm_client
 
-    def _build_prompt(self, context: AnalysisContext) -> str:
-        tech = json.dumps(context.technical_snapshot, indent=2, default=str)
-        return self.ANALYST_PROMPT.format(
-            ticker=context.ticker,
-            as_of_date=context.as_of_date,
-            regime=context.regime,
-            technical_snapshot=tech,
-            news_context=context.news_context,
-            economics_context=context.economics_context,
-            knowledge_context=context.knowledge_context,
-        )
+    def system_prompt(self) -> str:
+        return self.ANALYST_PROMPT
 
-    def _parse_response(self, text: str) -> dict:
-        text = text.strip()
-        if "```" in text:
-            start = text.find("```json")
-            if start == -1:
-                start = text.find("```")
-            if start != -1:
-                end = text.find("```", start + 3)
-                if end != -1:
-                    fence_len = 7 if text[start:start + 7] == "```json" else 3
-                    text = text[start + fence_len:end].strip()
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            log.warning(f"AnalystAgent JSON parse failed: {text[:200]}")
-            return {}
+    def build_user_message(self, context: AnalysisContext) -> str:
+        return ""
 
-    def analyze(self, context: AnalysisContext) -> AgentProposal:
-        prompt = self._build_prompt(context)
-        cfg = Config()
-        client = self._llm_client or OpenAI(
-            api_key=cfg.OPENAI_COMPATIBLE_API_KEY,
-            base_url=cfg.LLM_BACKEND_URL,
-        )
-        try:
-            resp = client.chat.completions.create(
-                model=cfg.DEEP_THINK_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                response_format={"type": "json_object"},
-            )
-            data = self._parse_response(resp.choices[0].message.content)
-        except Exception as e:
-            log.error(f"AnalystAgent LLM call failed: {e}")
-            data = {}
-
+    def _build_proposal(self, data: dict, context: AnalysisContext) -> AgentProposal:
         rating = data.get("rating", "HOLD")
         if rating not in ("BUY", "HOLD", "SELL"):
             rating = "HOLD"
@@ -136,6 +149,28 @@ Market Regime: {regime}
             key_risks=data.get("key_risks", []),
             supporting_rules_used=data.get("supporting_rules_used", []),
         )
+
+    def run(self, context: AnalysisContext, **llm_kwargs: Any) -> AgentProposal:
+        prompt = self.ANALYST_PROMPT.format(
+            ticker=context.ticker,
+            as_of_date=context.as_of_date,
+            regime=context.regime,
+            technical_snapshot=json.dumps(context.technical_snapshot, indent=2, default=str),
+            news_context=context.news_context,
+            economics_context=context.economics_context,
+            knowledge_context=context.knowledge_context,
+        )
+        messages = [{"role": "user", "content": prompt}]
+        model = llm_kwargs.get("model") or Config().DEEP_THINK_MODEL
+        data, raw = self._llm.call_json(
+            messages=messages,
+            model=model,
+            temperature=llm_kwargs.get("temperature", 0.3),
+            max_retries=llm_kwargs.get("max_retries", 2),
+            timeout_sec=llm_kwargs.get("timeout_sec", 60.0),
+            enable_thinking=llm_kwargs.get("enable_thinking", False),
+        )
+        return self._build_proposal(data or {}, context)
 
 
 class ScreenerAgent(BaseAgent):
